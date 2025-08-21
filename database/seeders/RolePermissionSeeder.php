@@ -31,18 +31,18 @@ class RolePermissionSeeder extends Seeder
 
         $merchantRole = Role::firstOrCreate(['name' => 'merchant']);
         $merchantRole->syncPermissions(['view dashboard', 'create promotion', 'edit own promotion', 'delete own promotion', 'view merchant dashboard', 'redeem user voucher', 'view own reports']);
-        
+
         $userRole = Role::firstOrCreate(['name' => 'user']);
         $userRole->syncPermissions(['view dashboard', 'view promotions', 'purchase promotion', 'view own vouchers', 'use cashback']);
 
         // 3. Buat Pengguna Default dan Tetapkan Peran (Ini adalah pengguna yang akan Anda gunakan untuk Postman)
-        $adminUser = User::firstOrCreate(['email' => 'admin@fave.com'], ['name' => 'Fave Admin', 'password' => Hash::make('password')]);
+        $adminUser = User::firstOrCreate(['email' => 'adminpay@gmail.com'], ['name' => 'Upay Admin', 'password' => Hash::make('password123')]);
         $adminUser->assignRole('admin');
 
-        $merchantUser = User::firstOrCreate(['email' => 'merchant@fave.com'], ['name' => 'Fave Merchant', 'password' => Hash::make('password')]);
+        $merchantUser = User::firstOrCreate(['email' => 'upay@gmail.com'], ['name' => 'Upay Merchant', 'password' => Hash::make('password123')]);
         $merchantUser->assignRole('merchant');
 
-        $regularUser = User::firstOrCreate(['email' => 'user@fave.com'], ['name' => 'Fave User', 'password' => Hash::make('password')]);
+        $regularUser = User::firstOrCreate(['email' => 'upoy@gmail.com'], ['name' => 'tiara', 'password' => Hash::make('password123')]);
         $regularUser->assignRole('user');
     }
 }
