@@ -26,7 +26,7 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        $user->assignRole('user');
+        $user->assignRole('user'); // Menetapkan peran 'user' secara default
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
@@ -54,7 +54,7 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        $user->assignRole('merchant');
+        $user->assignRole('merchant'); // Menetapkan peran 'merchant'
         Merchant::create([
             'user_id' => $user->id,
             'business_name' => $request->business_name,
@@ -87,13 +87,25 @@ class AuthController extends Controller
             'message' => 'Login berhasil! Selamat datang kembali.',
             'access_token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user->only('id', 'name', 'email')
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->getRoleNames()->first() // Menambahkan peran di respons login
+            ]
         ]);
     }
 
     public function getUser(Request $request)
     {
-        return $request->user();
+        $user = $request->user();
+
+        return response()->json([
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->getRoleNames()->first() // Menambahkan peran di respons user
+        ]);
     }
 
     public function logout(Request $request)
