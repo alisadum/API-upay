@@ -11,100 +11,99 @@ use Illuminate\Support\Facades\Auth;
 
 class MerchantController extends Controller
 {
-    // Daftar sebagai mitra
-    public function registerAsMerchant(Request $request)
+    // Lihat profil merchant sendiri
+    public function profile()
     {
-        $request->validate([
-            'business_name' => 'required|string|max:255',
-            'address' => 'required|string|max:255',
-            // ... dokumen lainnya
-        ]);
-
-        $user = Auth::user();
-
-        // Cek apakah user sudah terdaftar sebagai merchant atau sedang dalam proses
-        if (Merchant::where('user_id', $user->id)->exists()) {
-            return response()->json(['message' => 'Anda sudah mengajukan pendaftaran merchant atau sudah terdaftar.'], 409);
-        }
-
-        // Buat entri merchant baru, status default is_approved = false
-        $merchant = Merchant::create([
-            'user_id' => $user->id,
-            'business_name' => $request->business_name,
-            'address' => $request->address,
-            'is_approved' => false, // Menunggu persetujuan admin
-        ]);
-
-        // Beri peran 'merchant' pada user ini
-        // Jika user sebelumnya 'user', sekarang punya peran 'user' dan 'merchant'
-        $user->assignRole('merchant'); 
-
-        return response()->json(['message' => 'Pendaftaran merchant berhasil, menunggu persetujuan admin.']);
+        $merchant = Auth::user()->loadMissing('merchant')->merchant;
+        if (!$merchant) return response()->json(['message' => 'Belum terdaftar sebagai merchant.'], 404);
+        return response()->json($merchant);
     }
 
-    // Membuat promosi baru
+    // Update profil merchant (brand, alamat, whatsapp, foto)
+    public function updateProfile(Request $request)
+    {
+        $request->validate([
+            'business_name' => 'sometimes|required|string|max:255',
+            'address'       => 'sometimes|required|string|max:255',
+            'whatsapp'      => 'sometimes|required|string|max:25',
+            'foto'          => 'sometimes|nullable|image|mimes:jpg,jpeg,png|max:2048',
+        ]);
+
+        $merchant = Auth::user()->merchant;
+        if (!$merchant) return response()->json(['message' => 'Belum terdaftar sebagai merchant.'], 404);
+
+        if ($request->has('business_name')) $merchant->business_name = $request->business_name;
+        if ($request->has('address'))       $merchant->address       = $request->address;
+        if ($request->has('whatsapp'))      $merchant->whatsapp      = $request->whatsapp;
+
+        if ($request->hasFile('foto')) {
+            $path = $request->file('foto')->store('merchants', 'public');
+            $merchant->photo_path = $path;
+        }
+
+        $merchant->save();
+
+        return response()->json([
+            'message'  => 'Profil merchant berhasil diperbarui.',
+            'merchant' => $merchant
+        ]);
+    }
+
+    // Bikin promosi (butuh merchant approved)
     public function createPromotion(Request $request)
     {
         $request->validate([
-            'title' => 'required|string|max:255',
+            'title'       => 'required|string|max:255',
             'description' => 'required|string',
-            'price' => 'required|numeric|min:0',
+            'price'       => 'required|numeric|min:0',
         ]);
 
         $merchant = Auth::user()->merchant;
 
-        // Pastikan user ini adalah merchant dan sudah disetujui
         if (!$merchant || !$merchant->is_approved) {
             return response()->json(['message' => 'Anda bukan merchant yang disetujui.'], 403);
         }
 
         $promotion = $merchant->promotions()->create([
-            'title' => $request->title,
+            'title'       => $request->title,
             'description' => $request->description,
-            'price' => $request->price,
-            'is_approved' => false, // Perlu persetujuan admin
+            'price'       => $request->price,
+            'is_approved' => false, // nunggu admin
         ]);
 
-        return response()->json(['message' => 'Promosi berhasil dibuat, menunggu persetujuan admin.', 'promotion' => $promotion]);
+        return response()->json([
+            'message'   => 'Promosi berhasil dibuat, menunggu persetujuan admin.',
+            'promotion' => $promotion
+        ], 201);
     }
 
-    // Melihat promosi yang dibuat oleh merchant itu sendiri
-    public function viewOwnPromotions()
+    // List promosi sendiri
+    public function getOwnPromotions()
     {
         $merchant = Auth::user()->merchant;
-        if (!$merchant) {
-            return response()->json(['message' => 'Anda bukan merchant.'], 403);
-        }
-        $promotions = $merchant->promotions()->get();
-        return response()->json($promotions);
+        if (!$merchant) return response()->json(['message' => 'Anda bukan merchant.'], 403);
+
+        return response()->json($merchant->promotions()->latest()->get());
     }
 
-    // Merchant memvalidasi dan meredeem kode voucher user
-    public function redeemUserVoucher(Request $request)
+    // Redeem voucher
+    public function redeemVoucher(Request $request)
     {
         $request->validate(['voucher_code' => 'required|string']);
 
-        $voucher = Voucher::where('code', $request->voucher_code)->first();
+        $merchant = Auth::user()->merchant;
+        if (!$merchant) return response()->json(['message' => 'Anda bukan merchant.'], 403);
 
-        if (!$voucher) {
-            return response()->json(['message' => 'Voucher tidak ditemukan.'], 404);
-        }
-
-        if ($voucher->is_redeemed) {
-            return response()->json(['message' => 'Voucher sudah digunakan.'], 409);
-        }
-
-        // Pastikan voucher ini untuk promo yang ditawarkan oleh merchant yang sedang login
-        if ($voucher->promotion->merchant_id !== Auth::user()->merchant->id) {
+        $voucher = Voucher::with('promotion')->where('code', $request->voucher_code)->first();
+        if (!$voucher) return response()->json(['message' => 'Voucher tidak ditemukan.'], 404);
+        if ($voucher->is_redeemed) return response()->json(['message' => 'Voucher sudah digunakan.'], 409);
+        if ($voucher->promotion->merchant_id !== $merchant->id) {
             return response()->json(['message' => 'Voucher ini bukan untuk merchant Anda.'], 403);
         }
 
         $voucher->is_redeemed = true;
         $voucher->redeemed_at = now();
         $voucher->save();
-
-        // TODO: Logika untuk memberikan cashback ke user atau pembayaran ke merchant
-        // Ini bisa melibatkan tabel Wallet atau transaksi keuangan.
 
         return response()->json(['message' => 'Voucher berhasil diredeem.']);
     }
