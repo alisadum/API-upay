@@ -4,19 +4,18 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class Merchant extends Model
+class WalletTransaction extends Model
 {
     protected $fillable = [
         'user_id',
-        'business_name',
-        'address',
-        'whatsapp',
-        'photo_path',
-        'is_approved',
+        'amount',
+        'type',
+        'voucher_id',
+        'status',
     ];
 
     protected $casts = [
-        'is_approved' => 'boolean',
+        'amount' => 'decimal:2',
     ];
 
     public function user()
@@ -24,8 +23,8 @@ class Merchant extends Model
         return $this->belongsTo(User::class);
     }
 
-    public function promotions()
+    public function voucher()
     {
-        return $this->hasMany(Promotion::class);
+        return $this->belongsTo(Voucher::class);
     }
 }

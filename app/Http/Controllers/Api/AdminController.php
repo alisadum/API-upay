@@ -6,59 +6,92 @@ use App\Http\Controllers\Controller;
 use App\Models\Merchant;
 use App\Models\Promotion;
 use App\Models\User;
+use App\Models\Notification;
 use Illuminate\Http\Request;
 
 class AdminController extends Controller
 {
-    // Mengubah peran pengguna (misal: user biasa menjadi admin/merchant)
+    // Assign role user
     public function assignRole(Request $request, User $user)
     {
-        // Validasi apakah peran yang diminta valid
         $request->validate(['role_name' => 'required|string|exists:roles,name']);
-
-        // Hapus semua peran yang ada dan tambahkan peran baru
         $user->syncRoles($request->role_name);
-
-        return response()->json(['message' => "Peran pengguna '{$user->email}' berhasil diubah menjadi '{$request->role_name}'."]);
+        return response()->json(['message' => "Peran '{$user->email}' jadi '{$request->role_name}' bro."]);
     }
 
-    // Melihat daftar merchant yang belum disetujui
+    // Lihat merchant pending
     public function viewPendingMerchants()
     {
         $merchants = Merchant::where('is_approved', false)->get();
         return response()->json($merchants);
     }
 
-    // Menyetujui merchant
+    // Approve merchant
     public function approveMerchant(Merchant $merchant)
     {
         if ($merchant->is_approved) {
-            return response()->json(['message' => 'Merchant ini sudah disetujui.'], 409);
+            return response()->json(['message' => 'Merchant ini udah disetujui bro.'], 409);
         }
         $merchant->is_approved = true;
         $merchant->save();
-        return response()->json(['message' => 'Merchant berhasil disetujui.']);
+
+        Notification::create([
+            'user_id' => $merchant->user_id,
+            'type' => 'merchant_approved',
+            'message' => "Merchant {$merchant->business_name} udah disetujui admin!",
+        ]);
+
+        return response()->json(['message' => 'Merchant disetujui bro!']);
     }
 
-    // Melihat daftar promosi yang belum disetujui
+    // Lihat promo pending
     public function viewPendingPromotions()
     {
         $promotions = Promotion::where('is_approved', false)->with('merchant')->get();
         return response()->json($promotions);
     }
 
-    // Menyetujui promosi
+    // Approve promo
     public function approvePromotion(Promotion $promotion)
     {
         if ($promotion->is_approved) {
-            return response()->json(['message' => 'Promosi ini sudah disetujui.'], 409);
+            return response()->json(['message' => 'Promo ini udah disetujui bro.'], 409);
         }
         $promotion->is_approved = true;
+        $promotion->reject_reason = null;
         $promotion->save();
-        return response()->json(['message' => 'Promosi berhasil disetujui.']);
+
+        Notification::create([
+            'user_id' => $promotion->merchant->user_id,
+            'type' => 'promo_approved',
+            'message' => "Promo {$promotion->title} udah disetujui admin!",
+        ]);
+
+        return response()->json(['message' => 'Promo disetujui bro!']);
     }
 
-    // Melihat semua user (untuk kelola akun)
+    // Tolak promo
+    public function rejectPromotion(Request $request, Promotion $promotion)
+    {
+        $request->validate(['reject_reason' => 'required|string']);
+
+        if ($promotion->is_approved) {
+            return response()->json(['message' => 'Promo ini udah disetujui, ga bisa ditolak bro.'], 409);
+        }
+
+        $promotion->reject_reason = $request->reject_reason;
+        $promotion->save();
+
+        Notification::create([
+            'user_id' => $promotion->merchant->user_id,
+            'type' => 'promo_rejected',
+            'message' => "Promo {$promotion->title} ditolak admin. Alasan: {$request->reject_reason}",
+        ]);
+
+        return response()->json(['message' => 'Promo ditolak bro, alasan udah dikirim.']);
+    }
+
+    // Lihat semua user
     public function viewAllUsers()
     {
         $users = User::with('roles')->get();

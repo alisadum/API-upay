@@ -2,15 +2,31 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-
 
 class Promotion extends Model
 {
-    use HasFactory;
+    protected $fillable = [
+        'merchant_id',
+        'title',
+        'description',
+        'price',
+        'original_price',
+        'terms_conditions',
+        'location',
+        'category',
+        'start_time',
+        'end_time',
+        'photo_path',
+        'is_approved',
+        'reject_reason',
+    ];
 
-    protected $fillable = ['merchant_id', 'title', 'description', 'price', 'is_approved'];
+    protected $casts = [
+        'start_time' => 'datetime',
+        'end_time' => 'datetime',
+        'is_approved' => 'boolean',
+    ];
 
     public function merchant()
     {

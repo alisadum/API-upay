@@ -2,42 +2,32 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-/**
- * @property int $id
- * @property int $user_id
- * @property int $promotion_id
- * @property string $code
- * @property bool $is_redeemed
- * @property \Illuminate\Support\Carbon|null $redeemed_at
- * @property \Illuminate\Support\Carbon|null $created_at
- * @property \Illuminate\Support\Carbon|null $updated_at
- * @property-read \App\Models\Promotion $promotion
- * @property-read \App\Models\User $user
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher newModelQuery()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher newQuery()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher query()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereCode($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereCreatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereIsRedeemed($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher wherePromotionId($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereRedeemedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereUpdatedAt($value)
- * @method static \Illuminate\Database\Eloquent\Builder<static>|Voucher whereUserId($value)
- * @mixin \Eloquent
- */
 class Voucher extends Model
 {
-    use HasFactory;
-
-    protected $fillable = ['user_id', 'promotion_id', 'code', 'is_redeemed', 'redeemed_at'];
+    protected $fillable = [
+        'user_id',
+        'promotion_id',
+        'code',
+        'payment_method',
+        'qr_path',
+        'proof_path',
+        'booking_date',
+        'booking_time',
+        'status',
+        'is_redeemed',
+        'is_paid',
+        'transaction_id',
+        'redeemed_at',
+    ];
 
     protected $casts = [
         'is_redeemed' => 'boolean',
+        'is_paid' => 'boolean',
         'redeemed_at' => 'datetime',
+        'booking_date' => 'date',
+        'booking_time' => 'datetime',
     ];
 
     public function user()

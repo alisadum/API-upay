@@ -1,38 +1,45 @@
 <?php
 
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\MerchantController;
 use App\Http\Controllers\Api\AdminController;
-
+use App\Http\Controllers\Api\MidtransCallbackController;
 
 // AUTH (public)
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/register/merchant', [AuthController::class, 'registerMerchant']);
 Route::post('/login', [AuthController::class, 'login']);
-
+Route::get('/promotions', [UserController::class, 'viewPromotions']);
 
 // PROTECTED
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class, 'getUser']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
-    // --- User (Pembeli) Routes ---
+    // --- User Routes ---
     Route::middleware('role:user|merchant|admin')->group(function () {
-        Route::get('/promotions', [UserController::class, 'viewPromotions']);
         Route::post('/promotions/purchase', [UserController::class, 'purchasePromotion']);
         Route::get('/my-vouchers', [UserController::class, 'viewMyVouchers']);
         Route::get('/vouchers/{voucher}', [UserController::class, 'showVoucherCode']);
+        Route::post('/vouchers/{voucher}/book', [UserController::class, 'bookSchedule']);
+        Route::get('/points', [UserController::class, 'viewPoints']);
+        Route::post('/wallet/topup', [UserController::class, 'topUpWallet']);
+        Route::get('/wallet', [UserController::class, 'viewWallet']);
+        Route::get('/wallet/transactions', [UserController::class, 'viewWalletTransactions']);
     });
 
     // --- Merchant Routes ---
     Route::get('/merchant/profile', [MerchantController::class, 'profile']);
     Route::post('/merchant/profile', [MerchantController::class, 'updateProfile']);
     Route::post('/merchant/promotions', [MerchantController::class, 'createPromotion']);
+    Route::put('/merchant/promotions/{promotion}', [MerchantController::class, 'updatePromotion']);
     Route::get('/merchant/my-promotions', [MerchantController::class, 'getOwnPromotions']);
+    Route::get('/merchant/orders', [MerchantController::class, 'getOrders']);
     Route::post('/merchant/redeem-voucher', [MerchantController::class, 'redeemVoucher']);
+    Route::post('/merchant/confirm-whatsapp-payment', [MerchantController::class, 'confirmWhatsAppPayment']); // New
 
     // --- Admin Routes ---
     Route::middleware('role:admin')->group(function () {
@@ -41,6 +48,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/admin/merchants/{merchant}/approve', [AdminController::class, 'approveMerchant']);
         Route::get('/admin/promotions/pending', [AdminController::class, 'viewPendingPromotions']);
         Route::post('/admin/promotions/{promotion}/approve', [AdminController::class, 'approvePromotion']);
+        Route::post('/admin/promotions/{promotion}/reject', [AdminController::class, 'rejectPromotion']);
         Route::get('/admin/users', [AdminController::class, 'viewAllUsers']);
     });
+
+    // Notifikasi
+    Route::get('/notifications', function () {
+        $notifications = Auth::user()->notifications()->latest()->get();
+        return response()->json($notifications);
+    });
 });
+
+// Midtrans callback
+Route::post('/midtrans/callback', [MidtransCallbackController::class, 'handle']);
