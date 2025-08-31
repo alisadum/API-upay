@@ -13,76 +13,15 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use SimpleSoftwareIO\QrCode\Facades\QrCode;
+use Endroid\QrCode\QrCode;
+use Endroid\QrCode\Writer\PngWriter;
 use Midtrans\Config;
 use Midtrans\Snap;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 
 class UserController extends Controller
 {
-    /**
-     * Menampilkan daftar promosi dengan filter kategori.
-     */
-    public function viewPromotions(Request $request)
-    {
-        $query = Promotion::where('is_approved', true)
-            ->with('merchant')
-            ->select('id', 'merchant_id', 'title', 'description', 'price', 'original_price', 'terms_conditions', 'location', 'category', 'photo_path');
-
-        if ($request->has('category')) {
-            $query->where('category', $request->category);
-        }
-
-        $promotions = $query->get();
-        return response()->json($promotions);
-    }
-
-    /**
-     * Melakukan top-up AppWallet (dummy, langsung sukses).
-     */
-    public function topUpWallet(Request $request)
-    {
-        $request->validate([
-            'amount' => 'required|numeric|in:50000', // Hanya Rp 50.000 untuk dummy
-        ]);
-
-        $user = Auth::user();
-        $wallet = UserWallet::firstOrCreate(['user_id' => $user->id], ['balance' => 0]);
-
-        DB::beginTransaction();
-        try {
-            // Membuat record transaksi
-            $transaction = WalletTransaction::create([
-                'user_id' => $user->id,
-                'amount' => $request->amount,
-                'type' => 'topup',
-                'status' => 'success',
-            ]);
-
-            // Menambah saldo
-            $wallet->balance += $request->amount;
-            $wallet->save();
-
-            // Membuat notifikasi
-            Notification::create([
-                'user_id' => $user->id,
-                'type' => 'topup_confirmed',
-                'message' => "Top-up Rp {$request->amount} berhasil. Saldo AppWallet Anda sekarang Rp {$wallet->balance}.",
-            ]);
-
-            DB::commit();
-            return response()->json([
-                'message' => 'Top-up Rp 50.000 berhasil.',
-                'balance' => $wallet->balance,
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Membeli voucher dengan metode AppWallet, Midtrans, atau WhatsApp.
-     */
     public function purchasePromotion(Request $request)
     {
         $request->validate([
@@ -91,8 +30,7 @@ class UserController extends Controller
             'payment_method' => 'required|in:appwallet,midtrans,whatsapp',
         ]);
 
-        $promotion = Promotion::find($request->promotion_id);
-
+        $promotion = Promotion::with('outlets')->find($request->promotion_id);
         if (!$promotion || !$promotion->is_approved) {
             return response()->json(['message' => 'Promosi tidak ditemukan atau belum aktif.'], 404);
         }
@@ -102,45 +40,65 @@ class UserController extends Controller
         }
 
         $user = Auth::user();
-        $totalPrice = $promotion->price * $request->quantity; // Harga dalam Rupiah
-        $pointsEarned = $request->quantity * 10; // 10 poin per voucher
+        $totalPrice = $promotion->price * $request->quantity;
+        $pointsEarned = $request->quantity * 10;
         $vouchers = [];
+
+        $voucherPath = storage_path('app/public/vouchers');
+        if (!File::exists($voucherPath)) {
+            File::makeDirectory($voucherPath, 0755, true);
+        }
+        if (!is_writable($voucherPath)) {
+            Log::error('Folder vouchers tidak writable: ' . $voucherPath);
+            return response()->json(['message' => 'Folder vouchers tidak dapat ditulis.'], 500);
+        }
 
         DB::beginTransaction();
         try {
-            // Cek saldo untuk AppWallet
             if ($request->payment_method === 'appwallet') {
                 $wallet = UserWallet::firstOrCreate(['user_id' => $user->id], ['balance' => 0]);
                 if ($wallet->balance < $totalPrice) {
                     return response()->json(['message' => 'Saldo AppWallet tidak mencukupi. Silakan top-up.'], 400);
                 }
-
-                // Memotong saldo
                 $wallet->balance -= $totalPrice;
                 $wallet->save();
 
-                // Membuat record transaksi
                 WalletTransaction::create([
                     'user_id' => $user->id,
                     'amount' => $totalPrice,
                     'type' => 'purchase',
                     'status' => 'success',
-                    'voucher_id' => null, // Akan diupdate per voucher
+                    'voucher_id' => null,
                 ]);
             }
 
-            // Mengurangi slot jika ada
             if ($promotion->available_seats !== null) {
                 $promotion->available_seats -= $request->quantity;
                 $promotion->save();
             }
 
-            // Membuat voucher
-            $orderId = 'ORDER-' . Str::random(10);
+            $orderId = 'ORDER-' . Str::uuid()->toString();
             for ($i = 0; $i < $request->quantity; $i++) {
                 $voucherCode = Str::upper(Str::random(10));
-                $qrPath = 'vouchers/' . $voucherCode . '.png';
-                QrCode::format('png')->size(200)->generate($voucherCode, storage_path('app/public/' . $qrPath));
+                $qrPath = 'vouchers/' . $orderId . '-' . $i . '-' . time() . '.png';
+                $fullPath = storage_path('app/public/' . $qrPath);
+
+                Log::info('Membuat QR code untuk: ' . $voucherCode . ' di path: ' . $fullPath);
+                try {
+                    // Pisahkan pembuatan QrCode untuk kompatibilitas
+                    $qrCode = new QrCode($voucherCode);
+                    $qrCode->setSize(200);
+                    $writer = new PngWriter();
+                    $result = $writer->write($qrCode);
+                    file_put_contents($fullPath, $result->getString());
+
+                    if (!File::exists($fullPath)) {
+                        throw new \Exception('Gagal membuat file QR code untuk: ' . $voucherCode);
+                    }
+                } catch (\Exception $e) {
+                    Log::error('Gagal membuat QR code: ' . $e->getMessage() . ' | Code: ' . $voucherCode . ' | Path: ' . $fullPath);
+                    throw $e;
+                }
 
                 $voucher = Voucher::create([
                     'user_id' => $user->id,
@@ -148,13 +106,14 @@ class UserController extends Controller
                     'code' => $voucherCode,
                     'payment_method' => $request->payment_method,
                     'qr_path' => $qrPath,
-                    'status' => 'pending',
+                    'status' => $request->payment_method === 'appwallet' ? 'active' : 'pending',
                     'is_redeemed' => false,
-                    'is_paid' => $request->payment_method === 'appwallet' ? true : false,
+                    'is_paid' => $request->payment_method === 'appwallet',
                     'transaction_id' => $orderId,
+                    'start_at' => $promotion->start_time ?? now(),
+                    'expire_at' => ($promotion->start_time ? (new \DateTime($promotion->start_time))->modify('+30 days')->format('Y-m-d H:i:s') : now()->addDays(30)),
                 ]);
 
-                // Update transaksi dengan voucher_id untuk AppWallet
                 if ($request->payment_method === 'appwallet') {
                     WalletTransaction::where('user_id', $user->id)
                         ->where('type', 'purchase')
@@ -164,47 +123,49 @@ class UserController extends Controller
                         ->update(['voucher_id' => $voucher->id]);
                 }
 
-                // Log poin
+                $vouchers[] = $voucher;
+            }
+
+            if ($request->payment_method === 'appwallet') {
+                $user->points += $pointsEarned;
+                $previousLevel = $user->membership_level;
+                try {
+                    $user->updateMembershipLevel();
+                    $user->save();
+                } catch (\Exception $e) {
+                    Log::error('Gagal update membership level: ' . $e->getMessage());
+                    throw $e;
+                }
+
                 PointLog::create([
                     'user_id' => $user->id,
                     'points' => 10,
                     'source' => 'purchase',
-                    'voucher_id' => $voucher->id,
+                    'voucher_id' => $vouchers[0]->id,
                 ]);
-
-                $vouchers[] = $voucher;
             }
 
-            // Update poin dan membership
-            $user->points += $pointsEarned;
-            $previousLevel = $user->membership_level;
-            $user->updateMembershipLevel();
-            $user->save();
-
-            // Notifikasi voucher
+            $locationInfo = $promotion->outlets->isNotEmpty() ? $promotion->outlets->first()->address : ($promotion->location ?? 'Lokasi tidak tersedia');
             Notification::create([
                 'user_id' => $user->id,
                 'type' => 'voucher_created',
-                'message' => "Voucher untuk {$promotion->title} telah ditambahkan ke akun Anda. +{$pointsEarned} poin.",
+                'message' => "Voucher untuk {$promotion->title} di {$locationInfo} telah ditambahkan. " . ($request->payment_method === 'appwallet' ? "+{$pointsEarned} poin." : 'Tunggu konfirmasi pembayaran.'),
             ]);
 
-            // Notifikasi ke merchant
             Notification::create([
                 'user_id' => $promotion->merchant->user_id,
                 'type' => 'order_placed',
-                'message' => "Ada {$request->quantity} pesanan baru untuk {$promotion->title} dari {$user->name}.",
+                'message' => "Ada {$request->quantity} pesanan baru untuk {$promotion->title} di {$locationInfo} dari {$user->name}.",
             ]);
 
-            // Notifikasi naik level
-            if ($previousLevel !== $user->membership_level) {
+            if ($request->payment_method === 'appwallet' && $previousLevel !== $user->membership_level) {
                 Notification::create([
                     'user_id' => $user->id,
                     'type' => 'membership_upgraded',
-                    'message' => "Selamat, Anda telah naik ke level {$user->membership_level} membership!",
+                    'message' => "Selamat, Anda naik ke level {$user->membership_level} membership!",
                 ]);
             }
 
-            // Handle Midtrans
             if ($request->payment_method === 'midtrans') {
                 Config::$serverKey = env('MIDTRANS_SERVER_KEY');
                 Config::$isProduction = env('MIDTRANS_IS_PRODUCTION', false);
@@ -220,186 +181,215 @@ class UserController extends Controller
                         'first_name' => $user->name,
                         'email' => $user->email,
                     ],
+                    'callbacks' => [
+                        'finish' => route('payment.midtrans.callback'),
+                    ],
                 ];
 
-                $snapToken = Snap::getSnapToken($params);
+                try {
+                    $snapToken = Snap::getSnapToken($params);
+                } catch (\Exception $e) {
+                    Log::error('Gagal mendapatkan snap token Midtrans: ' . $e->getMessage());
+                    throw $e;
+                }
 
                 DB::commit();
                 return response()->json([
-                    'message' => 'Pembelian dimulai. Silakan lanjutkan pembayaran melalui Midtrans.',
+                    'message' => 'Pembelian dimulai. Lanjutkan pembayaran melalui Midtrans.',
                     'vouchers' => $vouchers,
                     'snap_token' => $snapToken,
-                    'points_earned' => $pointsEarned,
-                    'membership_level' => $user->membership_level,
                 ]);
             }
 
-            // Handle WhatsApp
             if ($request->payment_method === 'whatsapp') {
                 Notification::create([
                     'user_id' => $promotion->merchant->user_id,
                     'type' => 'payment_pending',
-                    'message' => "Pembayaran Rp {$totalPrice} untuk {$request->quantity} voucher {$promotion->title} melalui WhatsApp menunggu konfirmasi.",
+                    'message' => "Pembayaran Rp {$totalPrice} untuk {$request->quantity} voucher {$promotion->title} di {$locationInfo} menunggu konfirmasi via WhatsApp.",
                 ]);
 
                 DB::commit();
                 return response()->json([
-                    'message' => 'Pembelian melalui WhatsApp dimulai. Silakan kirim bukti transfer ke merchant.',
+                    'message' => 'Pembelian via WhatsApp dimulai. Kirim bukti transfer ke merchant.',
                     'vouchers' => $vouchers,
-                    'points_earned' => $pointsEarned,
-                    'membership_level' => $user->membership_level,
                 ]);
             }
 
-            // AppWallet
             DB::commit();
             return response()->json([
                 'message' => 'Pembelian berhasil. Voucher telah ditambahkan ke My Vouchers.',
                 'vouchers' => $vouchers,
                 'points_earned' => $pointsEarned,
                 'membership_level' => $user->membership_level,
-                'balance' => $wallet->balance,
+                'balance' => $wallet->balance ?? 0,
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Error saat membuat voucher: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine());
             return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Booking jadwal untuk voucher.
-     */
-    public function bookSchedule(Request $request, Voucher $voucher)
+    public function midtransCallback(Request $request)
     {
-        $request->validate([
-            'booking_date' => 'required|date|after:today',
-            'booking_time' => 'required|date_format:H:i',
-        ]);
+        $serverKey = env('MIDTRANS_SERVER_KEY');
+        $orderId = $request->order_id;
+        $statusCode = $request->status_code;
+        $grossAmount = $request->gross_amount;
 
-        if ($voucher->user_id !== Auth::id()) {
-            return response()->json(['message' => 'Anda tidak memiliki akses ke voucher ini.'], 403);
+        $hashed = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
+        if ($hashed !== $request->signature_key) {
+            return response()->json(['message' => 'Invalid signature'], 400);
         }
 
-        if ($voucher->status !== 'pending') {
-            return response()->json(['message' => 'Voucher sudah dibooking atau digunakan.'], 400);
+        $vouchers = Voucher::where('transaction_id', $orderId)->get();
+        if ($vouchers->isEmpty()) {
+            Log::error('No vouchers found for transaction_id: ' . $orderId);
+            return response()->json(['message' => 'Voucher tidak ditemukan'], 404);
         }
 
-        if (!$voucher->is_paid) {
-            return response()->json(['message' => 'Voucher belum dibayar.'], 400);
-        }
+        DB::beginTransaction();
+        try {
+            foreach ($vouchers as $voucher) {
+                if ($statusCode == 200 && !$voucher->is_paid) {
+                    $user = $voucher->user;
+                    $promotion = $voucher->promotion;
+                    $pointsEarned = 10;
 
-        $promotion = $voucher->promotion;
+                    $voucher->is_paid = true;
+                    $voucher->status = 'active';
+                    $voucher->save();
 
-        if ($promotion->start_time && $promotion->end_time) {
-            $bookingDateTime = \Carbon\Carbon::parse($request->booking_date . ' ' . $request->booking_time);
-            if ($bookingDateTime->lt($promotion->start_time) || $bookingDateTime->gt($promotion->end_time)) {
-                return response()->json(['message' => 'Jadwal tidak sesuai dengan periode promosi.'], 400);
+                    $user->points += $pointsEarned;
+                    $previousLevel = $user->membership_level;
+                    try {
+                        $user->updateMembershipLevel();
+                        $user->save();
+                    } catch (\Exception $e) {
+                        Log::error('Gagal update membership level di midtransCallback: ' . $e->getMessage());
+                        throw $e;
+                    }
+
+                    PointLog::create([
+                        'user_id' => $user->id,
+                        'points' => $pointsEarned,
+                        'source' => 'purchase',
+                        'voucher_id' => $voucher->id,
+                    ]);
+
+                    Notification::create([
+                        'user_id' => $user->id,
+                        'type' => 'payment_confirmed',
+                        'message' => "Pembayaran voucher {$voucher->code} telah dikonfirmasi.",
+                    ]);
+
+                    if ($previousLevel !== $user->membership_level) {
+                        Notification::create([
+                            'user_id' => $user->id,
+                            'type' => 'membership_upgraded',
+                            'message' => "Selamat, Anda naik ke level {$user->membership_level} membership!",
+                        ]);
+                    }
+                }
             }
+
+            DB::commit();
+            return response()->json(['message' => 'Pembayaran dikonfirmasi.']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error di midtransCallback: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine());
+            return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
         }
-
-        $voucher->booking_date = $request->booking_date;
-        $voucher->booking_time = $request->booking_time;
-        $voucher->status = 'booked';
-        $voucher->save();
-
-        $user = Auth::user();
-        $pointsEarned = 5;
-        $user->points += $pointsEarned;
-        $previousLevel = $user->membership_level;
-        $user->updateMembershipLevel();
-        $user->save();
-
-        PointLog::create([
-            'user_id' => $user->id,
-            'points' => $pointsEarned,
-            'source' => 'booking',
-            'voucher_id' => $voucher->id,
-        ]);
-
-        Notification::create([
-            'user_id' => $user->id,
-            'type' => 'booking_confirmed',
-            'message' => "Jadwal untuk voucher {$voucher->code} telah dikonfirmasi: {$request->booking_date} jam {$request->booking_time}. +{$pointsEarned} poin.",
-        ]);
-
-        if ($previousLevel !== $user->membership_level) {
-            Notification::create([
-                'user_id' => $user->id,
-                'type' => 'membership_upgraded',
-                'message' => "Selamat, Anda telah naik ke level {$user->membership_level} membership!",
-            ]);
-        }
-
-        return response()->json([
-            'message' => 'Booking berhasil.',
-            'points_earned' => $pointsEarned,
-            'membership_level' => $user->membership_level,
-        ]);
     }
 
-    /**
-     * Menampilkan daftar voucher milik user.
-     */
+    public function topUpWallet(Request $request)
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:1000',
+        ]);
+
+        $user = Auth::user();
+        $amount = $request->amount;
+
+        DB::beginTransaction();
+        try {
+            $wallet = UserWallet::firstOrCreate(['user_id' => $user->id], ['balance' => 0]);
+            $wallet->balance += $amount;
+            $wallet->save();
+
+            WalletTransaction::create([
+                'user_id' => $user->id,
+                'amount' => $amount,
+                'type' => 'topup',
+                'status' => 'success',
+                'voucher_id' => null,
+            ]);
+
+            DB::commit();
+            return response()->json([
+                'message' => 'Top-up wallet berhasil.',
+                'balance' => $wallet->balance,
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error saat top-up wallet: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine());
+            return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
+        }
+    }
+
     public function viewMyVouchers()
     {
-        $vouchers = Auth::user()->vouchers()->with('promotion.merchant')->get();
+        $user = Auth::user();
+        $vouchers = Voucher::where('user_id', $user->id)->with('promotion')->get();
+
         return response()->json($vouchers);
     }
 
-    /**
-     * Menampilkan kode voucher dan QR code.
-     */
-    public function showVoucherCode(Voucher $voucher)
+    public function showVoucherCode($voucher)
     {
-        if ($voucher->user_id !== Auth::id()) {
-            return response()->json(['message' => 'Anda tidak memiliki akses ke voucher ini.'], 403);
-        }
-        return response()->json([
-            'voucher_code' => $voucher->code,
-            'qr_url' => $voucher->qr_path ? url('storage/' . $voucher->qr_path) : null,
-            'status' => $voucher->status,
-            'is_redeemed' => $voucher->is_redeemed,
-            'is_paid' => $voucher->is_paid,
-            'booking_date' => $voucher->booking_date,
-            'booking_time' => $voucher->booking_time,
-        ]);
+        $user = Auth::user();
+        $voucher = Voucher::where('user_id', $user->id)->findOrFail($voucher);
+
+        return response()->json($voucher);
     }
 
-    /**
-     * Menampilkan poin dan riwayat poin.
-     */
+    public function bookSchedule(Request $request, $voucher)
+    {
+        return response()->json(['message' => 'Fitur booking belum diimplementasikan.'], 501);
+    }
+
     public function viewPoints()
     {
         $user = Auth::user();
-        $pointLogs = $user->pointLogs()->with('voucher.promotion')->latest()->get();
+
         return response()->json([
             'points' => $user->points,
             'membership_level' => $user->membership_level,
-            'point_logs' => $pointLogs,
         ]);
     }
 
-    /**
-     * Menampilkan saldo AppWallet.
-     */
     public function viewWallet()
     {
         $user = Auth::user();
-        $wallet = UserWallet::firstOrCreate(['user_id' => $user->id], ['balance' => 0]);
+        $wallet = UserWallet::where('user_id', $user->id)->firstOrFail();
+
         return response()->json([
             'balance' => $wallet->balance,
         ]);
     }
 
-    /**
-     * Menampilkan riwayat transaksi AppWallet.
-     */
     public function viewWalletTransactions()
     {
         $user = Auth::user();
-        $transactions = $user->walletTransactions()->with('voucher.promotion')->latest()->get();
-        return response()->json([
-            'transactions' => $transactions,
-        ]);
+        $transactions = WalletTransaction::where('user_id', $user->id)->get();
+
+        return response()->json($transactions);
+    }
+
+    public function viewPromotions()
+    {
+        $promotions = Promotion::where('is_approved', true)->with('merchant')->get();
+
+        return response()->json($promotions);
     }
 }

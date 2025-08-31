@@ -28,4 +28,9 @@ class Merchant extends Model
     {
         return $this->hasMany(Promotion::class);
     }
+
+    public function outlets()
+    {
+        return $this->hasMany(Outlet::class);
+    }
 }

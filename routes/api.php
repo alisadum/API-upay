@@ -1,5 +1,5 @@
 <?php
-
+use App\Models\Notification;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Api\AuthController;
@@ -39,7 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/merchant/my-promotions', [MerchantController::class, 'getOwnPromotions']);
     Route::get('/merchant/orders', [MerchantController::class, 'getOrders']);
     Route::post('/merchant/redeem-voucher', [MerchantController::class, 'redeemVoucher']);
-    Route::post('/merchant/confirm-whatsapp-payment', [MerchantController::class, 'confirmWhatsAppPayment']); // New
+    Route::post('/merchant/confirm-whatsapp-payment', [MerchantController::class, 'confirmWhatsAppPayment']);
+    Route::get('/merchant/outlets', [MerchantController::class, 'getOutlets']);
+    Route::post('/merchant/outlets', [MerchantController::class, 'createOutlet']);
 
     // --- Admin Routes ---
     Route::middleware('role:admin')->group(function () {
@@ -52,12 +54,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/admin/users', [AdminController::class, 'viewAllUsers']);
     });
 
-    // Notifikasi
     Route::get('/notifications', function () {
-        $notifications = Auth::user()->notifications()->latest()->get();
+        $notifications = Notification::where('user_id', Auth::id())
+            ->latest()
+            ->get();
         return response()->json($notifications);
     });
-});
+
+    Route::get('/categories', function () {
+    return response()->json(\App\Models\Category::all());
+}); 
 
 // Midtrans callback
 Route::post('/midtrans/callback', [MidtransCallbackController::class, 'handle']);
+
+});
