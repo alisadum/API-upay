@@ -12,6 +12,7 @@ use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Endroid\QrCode\QrCode;
 use Endroid\QrCode\Writer\PngWriter;
@@ -19,15 +20,95 @@ use Midtrans\Config;
 use Midtrans\Snap;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+
 
 class UserController extends Controller
 {
+  
+    public function createWallet(Request $request)
+    {
+        $request->validate([
+            'phone_number' => 'required|string|max:25|unique:user_wallets,phone_number',
+            'pin' => 'required|string|min:6|max:6|confirmed',
+        ]);
+
+        $user = Auth::user();
+        $existingWallet = UserWallet::where('user_id', $user->id)->first();
+        if ($existingWallet) {
+            return response()->json(['message' => 'App Wallet sudah terdaftar.'], 409);
+        }
+
+        $wallet = UserWallet::create([
+            'user_id' => $user->id,
+            'balance' => 0,
+            'phone_number' => $request->phone_number,
+            'pin' => Hash::make($request->pin),
+        ]);
+
+        return response()->json([
+            'message' => 'App Wallet berhasil dibuat.',
+            'data' => [
+                'wallet' => [
+                    'user_id' => $wallet->user_id,
+                    'phone_number' => $wallet->phone_number,
+                    'balance' => $wallet->balance,
+                ],
+            ],
+        ], 201);
+    }
+
+    public function topUpWallet(Request $request)
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:1000',
+            'pin' => 'required|string|min:6|max:6',
+        ]);
+
+        $user = Auth::user();
+        $wallet = UserWallet::where('user_id', $user->id)->first();
+        if (!$wallet) {
+            return response()->json(['message' => 'App Wallet belum terdaftar.'], 404);
+        }
+
+        if (!Hash::check($request->pin, $wallet->pin)) {
+            return response()->json(['message' => 'PIN salah.'], 401);
+        }
+
+        DB::beginTransaction();
+        try {
+            $wallet->balance += $request->amount;
+            $wallet->save();
+
+            WalletTransaction::create([
+                'user_id' => $user->id,
+                'amount' => $request->amount,
+                'type' => 'topup',
+                'status' => 'success',
+                'voucher_id' => null,
+            ]);
+
+            DB::commit();
+            return response()->json([
+                'message' => 'Top-up wallet berhasil.',
+                'data' => [
+                    'balance' => $wallet->balance,
+                ],
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error saat top-up wallet: ' . $e->getMessage());
+            return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
+        }
+    }
+
     public function purchasePromotion(Request $request)
     {
         $request->validate([
             'promotion_id' => 'required|exists:promotions,id',
             'quantity' => 'required|integer|min:1|max:10',
             'payment_method' => 'required|in:appwallet,midtrans,whatsapp',
+            'pin' => 'required_if:payment_method,appwallet|string|min:6|max:6',
         ]);
 
         $promotion = Promotion::with('outlets')->find($request->promotion_id);
@@ -56,7 +137,13 @@ class UserController extends Controller
         DB::beginTransaction();
         try {
             if ($request->payment_method === 'appwallet') {
-                $wallet = UserWallet::firstOrCreate(['user_id' => $user->id], ['balance' => 0]);
+                $wallet = UserWallet::where('user_id', $user->id)->first();
+                if (!$wallet) {
+                    return response()->json(['message' => 'App Wallet belum terdaftar.'], 404);
+                }
+                if (!Hash::check($request->pin, $wallet->pin)) {
+                    return response()->json(['message' => 'PIN salah.'], 401);
+                }
                 if ($wallet->balance < $totalPrice) {
                     return response()->json(['message' => 'Saldo AppWallet tidak mencukupi. Silakan top-up.'], 400);
                 }
@@ -83,9 +170,7 @@ class UserController extends Controller
                 $qrPath = 'vouchers/' . $orderId . '-' . $i . '-' . time() . '.png';
                 $fullPath = storage_path('app/public/' . $qrPath);
 
-                Log::info('Membuat QR code untuk: ' . $voucherCode . ' di path: ' . $fullPath);
                 try {
-                    // Pisahkan pembuatan QrCode untuk kompatibilitas
                     $qrCode = new QrCode($voucherCode);
                     $qrCode->setSize(200);
                     $writer = new PngWriter();
@@ -96,7 +181,7 @@ class UserController extends Controller
                         throw new \Exception('Gagal membuat file QR code untuk: ' . $voucherCode);
                     }
                 } catch (\Exception $e) {
-                    Log::error('Gagal membuat QR code: ' . $e->getMessage() . ' | Code: ' . $voucherCode . ' | Path: ' . $fullPath);
+                    Log::error('Gagal membuat QR code: ' . $e->getMessage());
                     throw $e;
                 }
 
@@ -129,13 +214,16 @@ class UserController extends Controller
             if ($request->payment_method === 'appwallet') {
                 $user->points += $pointsEarned;
                 $previousLevel = $user->membership_level;
-                try {
-                    $user->updateMembershipLevel();
-                    $user->save();
-                } catch (\Exception $e) {
-                    Log::error('Gagal update membership level: ' . $e->getMessage());
-                    throw $e;
+                // Ganti updateMembershipLevel dengan logika sederhana atau hapus jika tidak ada
+                // Contoh logika sederhana:
+                if ($user->points >= 100) {
+                    $user->membership_level = 'gold';
+                } elseif ($user->points >= 50) {
+                    $user->membership_level = 'silver';
+                } else {
+                    $user->membership_level = 'bronze';
                 }
+                $user->save();
 
                 PointLog::create([
                     'user_id' => $user->id,
@@ -196,8 +284,10 @@ class UserController extends Controller
                 DB::commit();
                 return response()->json([
                     'message' => 'Pembelian dimulai. Lanjutkan pembayaran melalui Midtrans.',
-                    'vouchers' => $vouchers,
-                    'snap_token' => $snapToken,
+                    'data' => [
+                        'vouchers' => $vouchers,
+                        'snap_token' => $snapToken,
+                    ],
                 ]);
             }
 
@@ -211,21 +301,25 @@ class UserController extends Controller
                 DB::commit();
                 return response()->json([
                     'message' => 'Pembelian via WhatsApp dimulai. Kirim bukti transfer ke merchant.',
-                    'vouchers' => $vouchers,
+                    'data' => [
+                        'vouchers' => $vouchers,
+                    ],
                 ]);
             }
 
             DB::commit();
             return response()->json([
                 'message' => 'Pembelian berhasil. Voucher telah ditambahkan ke My Vouchers.',
-                'vouchers' => $vouchers,
-                'points_earned' => $pointsEarned,
-                'membership_level' => $user->membership_level,
-                'balance' => $wallet->balance ?? 0,
+                'data' => [
+                    'vouchers' => $vouchers,
+                    'points_earned' => $pointsEarned,
+                    'membership_level' => $user->membership_level,
+                    'balance' => $wallet->balance ?? 0,
+                ],
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Error saat membuat voucher: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine());
+            Log::error('Error saat membuat voucher: ' . $e->getMessage());
             return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
         }
     }
@@ -262,13 +356,15 @@ class UserController extends Controller
 
                     $user->points += $pointsEarned;
                     $previousLevel = $user->membership_level;
-                    try {
-                        $user->updateMembershipLevel();
-                        $user->save();
-                    } catch (\Exception $e) {
-                        Log::error('Gagal update membership level di midtransCallback: ' . $e->getMessage());
-                        throw $e;
+                    // Ganti updateMembershipLevel dengan logika sederhana
+                    if ($user->points >= 100) {
+                        $user->membership_level = 'gold';
+                    } elseif ($user->points >= 50) {
+                        $user->membership_level = 'silver';
+                    } else {
+                        $user->membership_level = 'bronze';
                     }
+                    $user->save();
 
                     PointLog::create([
                         'user_id' => $user->id,
@@ -297,42 +393,7 @@ class UserController extends Controller
             return response()->json(['message' => 'Pembayaran dikonfirmasi.']);
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Error di midtransCallback: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine());
-            return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
-        }
-    }
-
-    public function topUpWallet(Request $request)
-    {
-        $request->validate([
-            'amount' => 'required|numeric|min:1000',
-        ]);
-
-        $user = Auth::user();
-        $amount = $request->amount;
-
-        DB::beginTransaction();
-        try {
-            $wallet = UserWallet::firstOrCreate(['user_id' => $user->id], ['balance' => 0]);
-            $wallet->balance += $amount;
-            $wallet->save();
-
-            WalletTransaction::create([
-                'user_id' => $user->id,
-                'amount' => $amount,
-                'type' => 'topup',
-                'status' => 'success',
-                'voucher_id' => null,
-            ]);
-
-            DB::commit();
-            return response()->json([
-                'message' => 'Top-up wallet berhasil.',
-                'balance' => $wallet->balance,
-            ], 200);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            Log::error('Error saat top-up wallet: ' . $e->getMessage() . ' | File: ' . $e->getFile() . ' | Line: ' . $e->getLine());
+            Log::error('Error di midtransCallback: ' . $e->getMessage());
             return response()->json(['message' => 'Terjadi kesalahan: ' . $e->getMessage()], 500);
         }
     }
@@ -342,7 +403,10 @@ class UserController extends Controller
         $user = Auth::user();
         $vouchers = Voucher::where('user_id', $user->id)->with('promotion')->get();
 
-        return response()->json($vouchers);
+        return response()->json([
+            'message' => 'Voucher berhasil diambil.',
+            'data' => $vouchers,
+        ]);
     }
 
     public function showVoucherCode($voucher)
@@ -350,7 +414,10 @@ class UserController extends Controller
         $user = Auth::user();
         $voucher = Voucher::where('user_id', $user->id)->findOrFail($voucher);
 
-        return response()->json($voucher);
+        return response()->json([
+            'message' => 'Kode voucher berhasil diambil.',
+            'data' => $voucher,
+        ]);
     }
 
     public function bookSchedule(Request $request, $voucher)
@@ -363,8 +430,11 @@ class UserController extends Controller
         $user = Auth::user();
 
         return response()->json([
-            'points' => $user->points,
-            'membership_level' => $user->membership_level,
+            'message' => 'Poin berhasil diambil.',
+            'data' => [
+                'points' => $user->points,
+                'membership_level' => $user->membership_level,
+            ],
         ]);
     }
 
@@ -374,7 +444,11 @@ class UserController extends Controller
         $wallet = UserWallet::where('user_id', $user->id)->firstOrFail();
 
         return response()->json([
-            'balance' => $wallet->balance,
+            'message' => 'Saldo wallet berhasil diambil.',
+            'data' => [
+                'balance' => $wallet->balance,
+                'phone_number' => $wallet->phone_number,
+            ],
         ]);
     }
 
@@ -383,13 +457,19 @@ class UserController extends Controller
         $user = Auth::user();
         $transactions = WalletTransaction::where('user_id', $user->id)->get();
 
-        return response()->json($transactions);
+        return response()->json([
+            'message' => 'Transaksi wallet berhasil diambil.',
+            'data' => $transactions,
+        ]);
     }
 
     public function viewPromotions()
     {
         $promotions = Promotion::where('is_approved', true)->with('merchant')->get();
 
-        return response()->json($promotions);
+        return response()->json([
+            'message' => 'Promosi berhasil diambil.',
+            'data' => $promotions,
+        ]);
     }
 }

@@ -13,14 +13,14 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         /**
-         * Global middleware (dijalankan di semua request)
+         * Global middleware
          */
         $middleware->append([
-            \Illuminate\Http\Middleware\HandleCors::class, // ✅ Laravel bawaan
+            \Illuminate\Http\Middleware\HandleCors::class,
         ]);
 
         /**
-         * Middleware alias (bisa dipakai di route)
+         * Middleware alias
          */
         $middleware->alias([
             'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
@@ -29,6 +29,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // Custom handler exception di sini kalau perlu
+        // custom handler
     })
+    
     ->create();

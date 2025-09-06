@@ -62,7 +62,7 @@ class User extends Authenticatable
         return $this->hasOne(UserWallet::class);
     }
 
-    
+
     public function wallet()
     {
         return $this->userWallet();
@@ -70,12 +70,19 @@ class User extends Authenticatable
 
     public function updateMembershipLevel()
     {
-        $this->membership_level = $this->points > 100 ? 'gold' : 'silver';
-    }
+        $points = $this->points;
 
-    public function save(array $options = [])
-    {
-        $this->updateMembershipLevel();
-        return parent::save($options);
+        if ($points >= 1000) {
+            $this->membership_level = 'platinum';
+        } elseif ($points >= 500) {
+            $this->membership_level = 'gold';
+        } elseif ($points >= 100) {
+            $this->membership_level = 'silver';
+        } else {
+            $this->membership_level = 'bronze';
+        }
+
+        // Simpan perubahan
+        $this->save();
     }
 }

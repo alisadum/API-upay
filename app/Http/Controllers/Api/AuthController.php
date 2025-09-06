@@ -1,7 +1,5 @@
 <?php
-
 namespace App\Http\Controllers\Api;
-
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Merchant;
@@ -13,7 +11,6 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    // REGISTER USER BIASA
     public function register(Request $request)
     {
         $request->validate([
@@ -30,20 +27,12 @@ class AuthController extends Controller
             'membership_level' => 'silver',
         ]);
 
-        // Buat wallet untuk user baru
-        UserWallet::create([
-            'user_id' => $user->id,
-            'balance' => 0,
-        ]);
-
-        if (method_exists($user, 'assignRole')) {
-            $user->assignRole('user');
-        }
-
+        UserWallet::create(['user_id' => $user->id, 'balance' => 0]);
+        if (method_exists($user, 'assignRole')) $user->assignRole('user');
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'message' => 'Registrasi user berhasil bro!',
+            'message' => 'Registrasi user berhasil!',
             'access_token' => $token,
             'token_type' => 'Bearer',
             'user' => [
@@ -58,7 +47,6 @@ class AuthController extends Controller
         ], 200);
     }
 
-    // REGISTER MERCHANT
     public function registerMerchant(Request $request)
     {
         $request->validate([
@@ -67,7 +55,7 @@ class AuthController extends Controller
             'password' => 'required|string|min:8|confirmed',
             'nama_brand' => 'required|string|max:255',
             'alamat' => 'required|string|max:255',
-            'whatsapp' => 'required|string|max:25',
+            'whatsapp' => 'required|string|max:25|unique:merchants,whatsapp',
             'foto' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
         ]);
 
@@ -77,34 +65,23 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        // Buat wallet untuk merchant
-        UserWallet::create([
-            'user_id' => $user->id,
-            'balance' => 0,
-        ]);
+        UserWallet::create(['user_id' => $user->id, 'balance' => 0]);
+        if (method_exists($user, 'assignRole')) $user->assignRole('merchant');
 
-        if (method_exists($user, 'assignRole')) {
-            $user->assignRole('merchant');
-        }
-
-        $fotoPath = null;
-        if ($request->hasFile('foto')) {
-            $fotoPath = $request->file('foto')->store('merchants', 'public');
-        }
-
+        $fotoPath = $request->hasFile('foto') ? $request->file('foto')->store('merchants', 'public') : null;
         $merchant = Merchant::create([
             'user_id' => $user->id,
             'business_name' => $request->nama_brand,
             'address' => $request->alamat,
             'whatsapp' => $request->whatsapp,
             'photo_path' => $fotoPath,
-            'is_approved' => true, // Ubah ke true agar langsung disetujui
+            'is_approved' => false,
         ]);
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'message' => 'Registrasi merchant berhasil! Langsung bisa login bro.',
+            'message' => 'Registrasi merchant berhasil, menunggu verifikasi admin.',
             'access_token' => $token,
             'token_type' => 'Bearer',
             'user' => [
@@ -125,7 +102,6 @@ class AuthController extends Controller
         ], 200);
     }
 
-    // LOGIN
     public function login(Request $request)
     {
         $request->validate([
@@ -134,16 +110,14 @@ class AuthController extends Controller
         ]);
 
         if (!Auth::attempt($request->only('email', 'password'))) {
-            throw ValidationException::withMessages([
-                'email' => ['Email atau password salah bro!'],
-            ]);
+            throw ValidationException::withMessages(['email' => ['Email atau password salah!']]);
         }
 
         $user = Auth::user()->load('merchant', 'wallet');
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'message' => 'Login berhasil, Selamat datang!',
+            'message' => 'Login berhasil!',
             'access_token' => $token,
             'token_type' => 'Bearer',
             'user' => [
@@ -164,32 +138,32 @@ class AuthController extends Controller
         ]);
     }
 
-    // PROFIL USER
     public function getUser(Request $request)
     {
         $user = $request->user()->load('merchant', 'wallet');
-
         return response()->json([
-            'id' => $user->id,
-            'name' => $user->name,
-            'email' => $user->email,
-            'role' => method_exists($user, 'getRoleNames') ? $user->getRoleNames()->first() : null,
-            'wallet_balance' => $user->wallet ? $user->wallet->balance : 0,
-            'merchant' => $user->merchant ? [
-                'id' => $user->merchant->id,
-                'business_name' => $user->merchant->business_name,
-                'address' => $user->merchant->address,
-                'whatsapp' => $user->merchant->whatsapp,
-                'photo_path' => $user->merchant->photo_path ? url('storage/' . $user->merchant->photo_path) : null,
-                'is_approved' => $user->merchant->is_approved,
-            ] : null,
+            'message' => 'Profil berhasil diambil.',
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => method_exists($user, 'getRoleNames') ? $user->getRoleNames()->first() : null,
+                'wallet_balance' => $user->wallet ? $user->wallet->balance : 0,
+                'merchant' => $user->merchant ? [
+                    'id' => $user->merchant->id,
+                    'business_name' => $user->merchant->business_name,
+                    'address' => $user->merchant->address,
+                    'whatsapp' => $user->merchant->whatsapp,
+                    'photo_path' => $user->merchant->photo_path ? url('storage/' . $user->merchant->photo_path) : null,
+                    'is_approved' => $user->merchant->is_approved,
+                ] : null,
+            ],
         ]);
     }
 
-    // LOGOUT
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()->delete();
-        return response()->json(['message' => 'Berhasil logout bro!']);
+        return response()->json(['message' => 'Berhasil logout!']);
     }
 }

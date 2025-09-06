@@ -1,4 +1,5 @@
 <?php
+
 use App\Models\Notification;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Auth;
@@ -7,6 +8,8 @@ use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\MerchantController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\MidtransCallbackController;
+
+Route::get('/sanctum/csrf-cookie', [\Laravel\Sanctum\Http\Controllers\CsrfCookieController::class, 'show']);
 
 // AUTH (public)
 Route::post('/register', [AuthController::class, 'register']);
@@ -32,16 +35,22 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // --- Merchant Routes ---
-    Route::get('/merchant/profile', [MerchantController::class, 'profile']);
-    Route::post('/merchant/profile', [MerchantController::class, 'updateProfile']);
-    Route::post('/merchant/promotions', [MerchantController::class, 'createPromotion']);
-    Route::put('/merchant/promotions/{promotion}', [MerchantController::class, 'updatePromotion']);
-    Route::get('/merchant/my-promotions', [MerchantController::class, 'getOwnPromotions']);
-    Route::get('/merchant/orders', [MerchantController::class, 'getOrders']);
-    Route::post('/merchant/redeem-voucher', [MerchantController::class, 'redeemVoucher']);
-    Route::post('/merchant/confirm-whatsapp-payment', [MerchantController::class, 'confirmWhatsAppPayment']);
-    Route::get('/merchant/outlets', [MerchantController::class, 'getOutlets']);
-    Route::post('/merchant/outlets', [MerchantController::class, 'createOutlet']);
+    Route::middleware(['auth:sanctum'])->prefix('merchant')->group(function () {
+    Route::get('/profile', [MerchantController::class, 'profile']);
+    Route::put('/profile', [MerchantController::class, 'updateProfile']); // Ubah ke PUT
+    Route::post('/promotions', [MerchantController::class, 'createPromotion']);
+    Route::put('/promotions/{promotion}', [MerchantController::class, 'updatePromotion']);
+    Route::delete('/promotions/{promotion}', [MerchantController::class, 'deletePromotion']); // Tambah prefix merchant
+    Route::get('/my-promotions', [MerchantController::class, 'getOwnPromotions']);
+    Route::get('/promotions/{promotion}', [MerchantController::class, 'showPromotion']);
+    Route::get('/orders', [MerchantController::class, 'getOrders']);
+    Route::post('/redeem-voucher', [MerchantController::class, 'redeemVoucher']);
+    Route::post('/confirm-whatsapp-payment', [MerchantController::class, 'confirmWhatsAppPayment']);
+    Route::get('/outlets', [MerchantController::class, 'getOutlets']);
+    Route::post('/outlets', [MerchantController::class, 'createOutlet']);
+    Route::put('/outlets/{id}', [MerchantController::class, 'updateOutlet']); // Ubah ke PUT
+    Route::delete('/outlets/{id}', [MerchantController::class, 'deleteOutlet']);
+});
 
     // --- Admin Routes ---
     Route::middleware('role:admin')->group(function () {
@@ -52,6 +61,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/admin/promotions/{promotion}/approve', [AdminController::class, 'approvePromotion']);
         Route::post('/admin/promotions/{promotion}/reject', [AdminController::class, 'rejectPromotion']);
         Route::get('/admin/users', [AdminController::class, 'viewAllUsers']);
+        Route::get('/admin/pending-outlets', [AdminController::class, 'viewPendingOutlets']);
+        Route::post('/admin/outlets/{outlet}/approve', [AdminController::class, 'approveOutlet']);
+        Route::post('/admin/outlets/{outlet}/reject', [AdminController::class, 'rejectOutlet']);
+        Route::get('/admin/users', [AdminController::class, 'viewAllUsers']);
+        Route::post('/admin/users/{user}/assign-role', [AdminController::class, 'assignRole']);
     });
 
     Route::get('/notifications', function () {
@@ -62,10 +76,9 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     Route::get('/categories', function () {
-    return response()->json(\App\Models\Category::all());
-}); 
+        return response()->json(\App\Models\Category::all());
+    });
+});
 
 // Midtrans callback
 Route::post('/midtrans/callback', [MidtransCallbackController::class, 'handle']);
-
-});
